@@ -2,6 +2,7 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.database import AsyncSessionLocal
 from app.repositories.weather import SQLAlchemyWeatherRepository
+from app.services.weather_fetcher import WeatherFetcherService
 
 logger = logging.getLogger("weather_app.scheduler")
 
@@ -22,8 +23,6 @@ async def fetch_all_cities_task(http_client, settings):
         records = await repo.get_all()
         for record in records:
             try:
-                # Import inside the loop to avoid circular imports at module load time.
-                from app.services.weather_fetcher import WeatherFetcherService
                 fetcher = WeatherFetcherService(http_client, settings)
                 await fetcher.fetch_and_upsert(record.city, record.country, session)
                 logger.info(f"Updated weather for {record.city},{record.country}")

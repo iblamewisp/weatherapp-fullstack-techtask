@@ -84,7 +84,6 @@ class SQLAlchemyWeatherRepository(BaseWeatherRepository):
         )
         stmt = stmt.returning(Weather)
         result = await self.session.execute(stmt)
-        row = result.fetchone()
+        weather = result.scalars().first()
         await self.session.flush()
-        weather = await self.get_by_city(data["city"], data["country"])
         return weather

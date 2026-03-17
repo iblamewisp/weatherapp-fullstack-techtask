@@ -138,11 +138,31 @@ This guarantees the backend only starts after Postgres is accepting connections.
 Original `/health` returned a static `{"status": "ok"}` — useless for real health monitoring
 since it doesn't reflect whether the service can actually serve requests.
 
-Updated to run `SELECT 1` against the DB on every call:
+Updated to run `SELECT 1` against the DB on every call, wrapped in a 3-second timeout:
 - `200 {"status": "ok", "db": "ok"}` — service is fully operational
-- `503 {"status": "degraded", "db": "unavailable"}` — DB unreachable
+- `503 "Service unavailable: database unreachable"` — DB unreachable or timed out
 
 This makes `/health` meaningful for load balancers, uptime monitors, and k8s readiness probes.
+
+### Security hardening
+
+Several hardening measures applied after initial implementation:
+
+- **Token comparison**: `x-internal-token` validation uses `secrets.compare_digest()` instead
+  of `==` to prevent timing attacks. String equality short-circuits on the first mismatched
+  byte, leaking information about token length and content through response time differences.
+
+- **Required secrets**: `OPENWEATHER_API_KEY` and `INTERNAL_API_TOKEN` have no default values.
+  Pydantic `Field(...)` causes the app to crash at startup if either is missing from the
+  environment. Previously both had placeholder defaults (`"your_key_here"`, `"change_me_in_prod"`)
+  meaning a missing `.env` file would silently start the app in an insecure state.
+
+### Rate limiter
+
+The original implementation created a `Limiter` instance in both `main.py` and `routers/weather.py`.
+Two independent instances meant rate limit counters were never shared — limits were silently broken.
+
+Fixed by extracting the single shared instance to `app/limiter.py`, imported by both modules.
 
 ---
 
@@ -163,8 +183,9 @@ They would be added before a real production deployment:
   frontend → BFF → backend → OWM calls. Makes debugging distributed issues harder.
 - **Migrations in entrypoint** — `alembic upgrade head` must be run manually. In production
   this is typically automated in the container entrypoint or a separate init job.
-- **Frontend error boundaries** — the React app has no error boundary components. An unhandled
-  render error crashes the whole page.
+- **Frontend error boundaries** — ~~the React app has no error boundary components~~ Added: `ErrorBoundary`
+  class component wraps all pages in the root layout. Unhandled render errors show a recoverable
+  fallback with a "Try again" reset instead of a blank screen.
 - **Pagination on GET /weather** — returns all records. Will degrade with large datasets.
 
 ---
@@ -175,8 +196,9 @@ They would be added before a real production deployment:
 weather-app/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py           # App entry, lifespan, middleware, rate limiter, health check
-│   │   ├── config.py         # Pydantic settings (reads from .env)
+│   │   ├── main.py           # App entry, lifespan, middleware, health check
+│   │   ├── config.py         # Pydantic settings (reads from .env, required fields fail fast)
+│   │   ├── limiter.py        # Shared slowapi Limiter instance (imported by main + router)
 │   │   ├── database.py       # Async SQLAlchemy engine, session factory, get_db DI
 │   │   ├── logger.py         # Logging setup
 │   │   ├── models/           # SQLAlchemy ORM models (Weather with unique constraint)
@@ -199,7 +221,8 @@ weather-app/
 │       ├── components/
 │       │   ├── WeatherForm.tsx       # react-hook-form + Zod, city/coords toggle
 │       │   ├── WeatherResult.tsx     # Result display with temperature color coding
-│       │   └── Notification.tsx     # react-hot-toast wrapper
+│       │   ├── Notification.tsx      # react-hot-toast wrapper
+│       │   └── ErrorBoundary.tsx     # Class-based error boundary, wraps all pages
 │       ├── store/weatherStore.ts     # Zustand + sessionStorage persist
 │       ├── lib/
 │       │   ├── api/weatherClient.ts  # All fetch calls (never from components directly)

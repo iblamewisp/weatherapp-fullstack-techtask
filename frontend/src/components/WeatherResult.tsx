@@ -1,4 +1,5 @@
 "use client";
+import Image from "next/image";
 import { WeatherResponse } from "@/types/weather";
 import { useRouter } from "next/navigation";
 
@@ -38,7 +39,7 @@ export function WeatherResult({ weather }: Props) {
             {weather.city}, {weather.country}
           </h1>
           {weather.weather_icon && (
-            <img
+            <Image
               src={`https://openweathermap.org/img/wn/${weather.weather_icon}@2x.png`}
               alt={weather.weather_description || "weather icon"}
               className="mx-auto"

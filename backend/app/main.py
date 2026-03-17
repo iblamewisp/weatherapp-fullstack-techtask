@@ -1,19 +1,19 @@
+import asyncio
 import logging
+import secrets
 from contextlib import asynccontextmanager
 import aiohttp
 from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import text
 from app.database import AsyncSessionLocal
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from app.limiter import limiter
 from app.config import settings
 from app.logger import setup_logging
 from app.routers.weather import router as weather_router
 from app.tasks.scheduler import scheduler, fetch_all_cities_task
-
-limiter = Limiter(key_func=get_remote_address)
 
 setup_logging()
 logger = logging.getLogger("weather_app")
@@ -56,7 +56,7 @@ UNPROTECTED_PATHS = {"/health"}
 async def verify_internal_token(request: Request, call_next):
     if request.url.path not in UNPROTECTED_PATHS:
         token = request.headers.get("x-internal-token", "")
-        if token != settings.INTERNAL_API_TOKEN:
+        if not secrets.compare_digest(token, settings.INTERNAL_API_TOKEN):
             logger.warning(f"Unauthorized request to {request.url.path} from {request.client.host}")
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -65,9 +65,13 @@ async def verify_internal_token(request: Request, call_next):
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    response = await call_next(request)
-    logger.info(f"{request.method} {request.url.path} -> {response.status_code}")
-    return response
+    try:
+        response = await call_next(request)
+        logger.info(f"{request.method} {request.url.path} -> {response.status_code}")
+        return response
+    except Exception as e:
+        logger.error(f"{request.method} {request.url.path} -> unhandled error: {e}")
+        raise
 
 
 app.include_router(weather_router, prefix="/api/v1")
@@ -77,8 +81,8 @@ app.include_router(weather_router, prefix="/api/v1")
 async def health():
     try:
         async with AsyncSessionLocal() as session:
-            await session.execute(text("SELECT 1"))
+            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=3.0)
         return {"status": "ok", "db": "ok"}
-    except Exception as e:
+    except (asyncio.TimeoutError, Exception) as e:
         logger.error(f"Health check DB failed: {e}")
-        raise HTTPException(status_code=503, detail={"status": "degraded", "db": "unavailable"})
+        raise HTTPException(status_code=503, detail="Service unavailable: database unreachable")

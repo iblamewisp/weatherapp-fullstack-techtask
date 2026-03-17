@@ -3,9 +3,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from app.database import get_db
+from app.limiter import limiter
 from app.repositories.weather import SQLAlchemyWeatherRepository
 from app.schemas.weather import WeatherCreate, WeatherUpdate, WeatherResponse, CityQuery, CoordinatesQuery
 from app.services.weather_fetcher import WeatherFetcherService
@@ -14,7 +13,6 @@ from typing import List, Union
 
 router = APIRouter(prefix="/weather", tags=["weather"])
 logger = logging.getLogger("weather_app.router")
-limiter = Limiter(key_func=get_remote_address)
 
 
 def get_fetcher(request: Request) -> WeatherFetcherService:

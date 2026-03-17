@@ -12,6 +12,7 @@ import {
   CityFormValues,
   CoordsFormValues,
 } from "@/lib/validations/weather.schema";
+import { WeatherResponse } from "@/types/weather";
 
 type Mode = "city" | "coords";
 
@@ -30,35 +31,27 @@ export function WeatherForm() {
     defaultValues: { mode: "coords", latitude: 0, longitude: 0 },
   });
 
-  const handleCitySubmit = async (data: CityFormValues) => {
+  const handleSubmit = async (fetchFn: () => Promise<WeatherResponse>) => {
     setLoading(true);
     try {
-      const weather = await weatherClient.fetchByCity(data.city, data.country);
+      const weather = await fetchFn();
       setWeatherData(weather);
       notify.success("Weather fetched successfully!");
       router.push("/result");
-    } catch (err: any) {
-      setError(err.message);
-      notify.error(err.message || "Failed to fetch weather");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to fetch weather";
+      setError(message);
+      notify.error(message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCoordsSubmit = async (data: CoordsFormValues) => {
-    setLoading(true);
-    try {
-      const weather = await weatherClient.fetchByCoords(data.latitude, data.longitude);
-      setWeatherData(weather);
-      notify.success("Weather fetched successfully!");
-      router.push("/result");
-    } catch (err: any) {
-      setError(err.message);
-      notify.error(err.message || "Failed to fetch weather");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const handleCitySubmit = (data: CityFormValues) =>
+    handleSubmit(() => weatherClient.fetchByCity(data.city, data.country));
+
+  const handleCoordsSubmit = (data: CoordsFormValues) =>
+    handleSubmit(() => weatherClient.fetchByCoords(data.latitude, data.longitude));
 
   return (
     <div className="w-full max-w-md mx-auto">
