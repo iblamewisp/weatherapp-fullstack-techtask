@@ -39,7 +39,6 @@ The DB acts as a cache and history store, not the source of truth.
 cp .env.example backend/.env
 # Edit backend/.env and set OPENWEATHER_API_KEY=<your_key>
 docker compose up --build
-docker compose exec backend alembic upgrade head
 ```
 
 ---
@@ -181,8 +180,6 @@ They would be added before a real production deployment:
   misconfigured, the backend starts successfully and only fails on the first real request.
 - **Structured logging / tracing** — logs are plaintext. No request IDs, no correlation between
   frontend → BFF → backend → OWM calls. Makes debugging distributed issues harder.
-- **Migrations in entrypoint** — `alembic upgrade head` must be run manually. In production
-  this is typically automated in the container entrypoint or a separate init job.
 - **Frontend error boundaries** — ~~the React app has no error boundary components~~ Added: `ErrorBoundary`
   class component wraps all pages in the root layout. Unhandled render errors show a recoverable
   fallback with a "Try again" reset instead of a blank screen.
