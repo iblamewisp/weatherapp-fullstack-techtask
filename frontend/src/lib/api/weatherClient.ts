@@ -1,29 +1,42 @@
 import { WeatherResponse } from "@/types/weather";
 
+const BASE = "/api/weather";
+
 export const weatherClient = {
-  fetchByCity: async (city: string, country?: string): Promise<WeatherResponse> => {
-    const res = await fetch("/api/weather", {
+  fetchByCity: async (city: string, country: string): Promise<WeatherResponse> => {
+    const res = await fetch(BASE, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "city", city, country: country ?? "" }),
+      body: JSON.stringify({ city, country }),
     });
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.detail || "Failed to fetch weather");
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to fetch weather");
     }
     return res.json();
   },
 
   fetchByCoords: async (latitude: number, longitude: number): Promise<WeatherResponse> => {
-    const res = await fetch("/api/weather", {
+    const res = await fetch(BASE, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "coords", latitude, longitude }),
+      body: JSON.stringify({ latitude, longitude }),
     });
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.detail || "Failed to fetch weather");
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to fetch weather");
     }
     return res.json();
+  },
+
+  getAll: async (): Promise<WeatherResponse[]> => {
+    const res = await fetch(BASE);
+    if (!res.ok) throw new Error("Failed to fetch weather list");
+    return res.json();
+  },
+
+  deleteById: async (id: string): Promise<void> => {
+    const res = await fetch(`${BASE}/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error("Failed to delete weather record");
   },
 };
