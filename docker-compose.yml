@@ -1,4 +1,9 @@
 services:
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "6379:6379"
+
   db:
     image: postgres:18-alpine
     environment:
@@ -24,6 +29,27 @@ services:
     env_file: ./backend/.env
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend:/app
+
+  celery-worker:
+    build: ./backend
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file: ./backend/.env
+    volumes:
+      - ./backend:/app
+
+  celery-beat:
+    build: ./backend
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    depends_on:
+      - redis
+    env_file: ./backend/.env
     volumes:
       - ./backend:/app
 

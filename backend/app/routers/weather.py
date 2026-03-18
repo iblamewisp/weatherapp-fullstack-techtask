@@ -25,6 +25,13 @@ async def list_weather(request: Request, db: AsyncSession = Depends(get_db)):
     return await repo.get_all()
 
 
+@router.get("/popular", response_model=List[WeatherResponse])
+@limiter.limit("60/minute")
+async def get_popular_weather(request: Request, db: AsyncSession = Depends(get_db)):
+    repo = SQLAlchemyWeatherRepository(db)
+    return await repo.get_top_cities()
+
+
 @router.get("/{id}", response_model=WeatherResponse)
 @limiter.limit("20/minute")
 async def get_weather(request: Request, id: uuid.UUID, db: AsyncSession = Depends(get_db)):
@@ -76,7 +83,7 @@ async def fetch_weather(
     else:
         result = await fetcher.fetch_and_upsert_by_coords(body.latitude, body.longitude, db)
 
-    if result.from_cache:
+    if result.owm_error:
         response.headers["X-Cache-Fallback"] = "true"
 
     return result.data

@@ -19,7 +19,7 @@ type Mode = "city" | "coords";
 export function WeatherForm() {
   const [mode, setMode] = useState<Mode>("city");
   const router = useRouter();
-  const { setWeatherData, setLoading, setError } = useWeatherStore();
+  const { setWeatherData, addRecentSearch, setLoading, setError } = useWeatherStore();
 
   const cityForm = useForm<CityFormValues>({
     resolver: zodResolver(cityFormSchema),
@@ -36,6 +36,7 @@ export function WeatherForm() {
     try {
       const weather = await fetchFn();
       setWeatherData(weather);
+      addRecentSearch(weather);
       notify.success("Weather fetched successfully!");
       router.push("/result");
     } catch (err) {

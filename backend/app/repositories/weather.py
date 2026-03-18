@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
-from sqlalchemy import select, delete, func
+from sqlalchemy import select, delete, func, or_, and_
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 from app.models.weather import Weather
@@ -44,6 +45,28 @@ class SQLAlchemyWeatherRepository(BaseWeatherRepository):
     # session.scalars() returns all matching ORM objects as a sequence.
     async def get_all(self) -> List[Weather]:
         result = await self.session.scalars(select(Weather))
+        return list(result.all())
+
+    # Returns records whose last_updated falls within the sliding window [older_than, newer_than].
+    # Used by the background refresh task to proactively update "active but stale" records.
+    async def get_stale_in_window(self, older_than: datetime, newer_than: datetime) -> List[Weather]:
+        result = await self.session.scalars(
+            select(Weather).where(
+                Weather.last_updated >= older_than,
+                Weather.last_updated < newer_than,
+            )
+        )
+        return list(result.all())
+
+    # Returns only the fixed popular cities from the DB (whatever Celery Beat has refreshed).
+    # Uses OR of AND conditions — SQLAlchemy can't do tuple IN natively across dialects.
+    async def get_top_cities(self) -> List[Weather]:
+        from app.constants import POPULAR_CITIES
+        conditions = [
+            and_(Weather.city == city, Weather.country == country)
+            for city, country in POPULAR_CITIES
+        ]
+        result = await self.session.scalars(select(Weather).where(or_(*conditions)))
         return list(result.all())
 
     # Creates a bare record without weather data — used for manual POST /weather.

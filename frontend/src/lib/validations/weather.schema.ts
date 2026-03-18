@@ -29,3 +29,16 @@ export const weatherFormSchema = z.discriminatedUnion("mode", [
 export type WeatherFormValues = z.infer<typeof weatherFormSchema>;
 export type CityFormValues = z.infer<typeof cityFormSchema>;
 export type CoordsFormValues = z.infer<typeof coordsFormSchema>;
+
+// Only exposes fields that make sense for a user to manually override.
+// City/country/coordinates are intentionally excluded.
+export const editWeatherSchema = z.object({
+  temperature: z.coerce.number().min(-100).max(60).nullable().optional(),
+  feels_like: z.coerce.number().min(-100).max(60).nullable().optional(),
+  humidity: z.coerce.number().int().min(0).max(100).nullable().optional(),
+  pressure: z.coerce.number().int().min(870).max(1084).nullable().optional(),
+  wind_speed: z.coerce.number().min(0).max(500).nullable().optional(),
+  weather_description: z.string().max(100).nullable().optional(),
+});
+
+export type EditWeatherValues = z.infer<typeof editWeatherSchema>;

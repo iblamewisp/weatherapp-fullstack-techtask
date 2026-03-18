@@ -5,7 +5,7 @@ asyncpg>=0.29.0
 alembic
 pydantic-settings>=2.0
 aiohttp
-apscheduler>=3.10,<4.0
+celery[redis]>=5.3
 pytest
 pytest-asyncio
 httpx

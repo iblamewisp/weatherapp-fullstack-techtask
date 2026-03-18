@@ -9,11 +9,11 @@ from app.database import Base
 class Weather(Base):
     __tablename__ = "weather"
 
-    # Уникальный constraint на (city, country) — используется в upsert через ON CONFLICT.
-    # Имя constraint должно совпадать с тем, что передаётся в on_conflict_do_update.
+    # Unique constraint on (city, country) — used in upsert via ON CONFLICT.
+    # The constraint name must match what is passed to on_conflict_do_update.
     __table_args__ = (UniqueConstraint("city", "country", name="uq_city_country"),)
 
-    # UUID как PK — избегаем предсказуемых числовых ID в публичном API.
+    # UUID as PK — avoids predictable numeric IDs in the public API.
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
@@ -27,13 +27,13 @@ class Weather(Base):
     pressure: Mapped[int] = mapped_column(Integer, nullable=True)      # hPa
     wind_speed: Mapped[float] = mapped_column(Float, nullable=True)    # m/s
     weather_description: Mapped[str] = mapped_column(String, nullable=True)
-    weather_icon: Mapped[str] = mapped_column(String, nullable=True)   # код иконки OWM, напр. "04d"
+    weather_icon: Mapped[str] = mapped_column(String, nullable=True)   # OWM icon code, e.g. "04d"
 
-    # Обновляется при каждом upsert — показывает когда данные последний раз синхронизировались с OWM.
+    # Updated on every upsert — reflects when the record was last synced with OWM.
     last_updated: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
-    # Устанавливается один раз при создании записи.
+    # Set once on record creation, never overwritten by upsert.
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

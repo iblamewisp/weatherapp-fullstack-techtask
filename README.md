@@ -3,44 +3,66 @@
 ## Architecture Overview
 
 A fullstack weather application with a Next.js 14 frontend (App Router, Zustand, Zod, react-hook-form)
-acting as a BFF, proxying requests to a FastAPI backend that fetches live weather data from OpenWeatherMap,
-stores it in PostgreSQL via SQLAlchemy async, and refreshes data on a configurable schedule using APScheduler.
+acting as a BFF, proxying requests to a FastAPI backend that stores weather data in PostgreSQL via
+SQLAlchemy async. Background refresh is handled by Celery Beat workers backed by Redis.
 
-The core data flow for a weather lookup:
+### Core data flow
 
 ```
-                                                         ┌─ OWM reachable ──► OpenWeatherMap API
-Browser → Next.js BFF (/api/weather) → FastAPI /fetch ──┤                           │
-               ◄────────────────────────────────────────┤                           ▼
-                                                         │                    PostgreSQL (upsert)
-                                                         │                           │
-                                                         └──────────────────────◄───┘
+                                              ┌─ record fresh (<30 min) ──► return from DB
+Browser → Next.js BFF → FastAPI POST /fetch ──┤
+                                              └─ record stale / missing
+                                                    │
+                                                    ├─ OWM reachable ──► OpenWeatherMap API
+                                                    │                          │
+                                                    │                    PostgreSQL (upsert)
+                                                    │                          │
+                                                    └─ OWM unreachable ──► PostgreSQL (read)
+                                                                         [X-Cache-Fallback: true]
+
+Celery Beat (every 10 min) ──┬── refresh_popular_cities ──► OWM for top-10 ──► PostgreSQL (upsert)
+                             └── refresh_sliding_window ──► OWM for records 30–60 min old ──► PostgreSQL (upsert)
+```
+
+**Fresh cache hit**: record exists and `last_updated < 30 min` → returned from DB, no OWM call.
+
+**Stale/missing**: record is older than 30 min or doesn't exist → OWM API called, result upserted and returned.
+
+**OWM error fallback**: OWM is unreachable → last known DB record returned with `X-Cache-Fallback: true`.
+Client receives `200` with stale data instead of an error, as long as any prior record exists.
+
+**Sliding window**: Celery Beat proactively refreshes records in the 30–60 min staleness window every
+10 minutes. This pre-warms the cache for recently-searched cities so the next search is likely a
+fresh cache hit rather than an on-demand OWM call.
+
+**Popular cities**: a hardcoded list of 10 cities is always kept fresh by a dedicated Celery Beat
+task (every 10 min). The frontend home page fetches these directly from DB via `GET /popular`.
+
+### Frontend data flow
+
+```
+Home page load ──► GET /api/weather/popular ──► DB read ──► render top-10 grid
+
+User searches city ──► POST /api/weather/fetch ──► backend (fresh check → OWM if needed)
                                                          │
-                                                         └─ OWM unreachable ──► PostgreSQL (read)
-                                                                                [X-Cache-Fallback: true]
+                                              stored in Zustand (sessionStorage)
+                                              displayed above top-10 as "Recent searches"
 
-APScheduler ──────────────────────────────────────────────────────────────────────────────────────
-  (every N min, per city) ──► OpenWeatherMap API ──► PostgreSQL (upsert)
+User edits card ──► PUT /api/weather/{id} ──► DB update
+                                                  │
+                                      local state updated (popular array + Zustand)
 ```
 
-**Happy path**: OWM returns data → upserted to PostgreSQL → returned to client.
-
-**Cache-aside fallback**: if OWM is unreachable (timeout, 5xx, rate limit), the service reads the
-last known record from PostgreSQL and returns it with an `X-Cache-Fallback: true` response header.
-The client still receives a `200` with stale data rather than an error, as long as a previous
-record exists for that city.
-
-`POST /fetch` is intentionally a POST, not a GET — it performs a write (upsert) on every call.
-The semantics are fetch-and-store: get fresh data from OWM and insert/update the DB atomically.
-The DB acts as a write-through cache and history store, not the source of truth.
+User-searched cities live in Zustand sessionStorage — visible only to that user, only while the
+tab is open. They are deduplicated by city+country and capped at 5 recent entries.
 
 ---
 
 ## Prerequisites
 
 - Docker & Docker Compose
-- Node.js 24 (for local frontend development only — not required if using Docker)
-- Python 3.12 (for local backend development only — not required if using Docker)
+- Node.js 24 (for local frontend development only)
+- Python 3.12 (for local backend development only)
 - OpenWeatherMap API key (free tier: https://openweathermap.org/api)
 
 > New OWM free-tier keys can take 10–30 minutes to activate after creation.
@@ -51,9 +73,11 @@ The DB acts as a write-through cache and history store, not the source of truth.
 
 ```bash
 cp .env.example backend/.env
-# Edit backend/.env and set OPENWEATHER_API_KEY=<your_key>
+# Edit backend/.env: set OPENWEATHER_API_KEY and INTERNAL_API_TOKEN
 docker compose up --build
 ```
+
+On first start, the backend seeds all 10 popular cities from OWM before accepting requests.
 
 ---
 
@@ -69,7 +93,11 @@ docker compose up -d db
 # Backend — repository, route, and service tests
 docker compose exec backend pytest
 
-# Frontend — validation, store, API client, and BFF route tests
+# Frontend — BFF route and API client tests (Docker)
+docker build --target test -t frontend-test ./frontend
+docker run --rm frontend-test
+
+# Frontend — local
 cd frontend && npm test
 ```
 
@@ -80,131 +108,121 @@ cd frontend && npm test
 | Method | Path | Rate limit | Description |
 |--------|------|------------|-------------|
 | GET | /api/v1/weather | 20/min | List all cached weather records |
+| GET | /api/v1/weather/popular | 60/min | Top-10 popular cities (DB read only) |
 | GET | /api/v1/weather/{id} | 20/min | Get record by UUID |
 | POST | /api/v1/weather | 5/min | Create bare record (no OWM fetch) |
-| PUT | /api/v1/weather/{id} | 5/min | Update record fields |
+| PUT | /api/v1/weather/{id} | 5/min | Update record fields manually |
 | DELETE | /api/v1/weather/{id} | 5/min | Delete record, returns 204 |
-| POST | /api/v1/weather/fetch | 5/min | Fetch from OWM + upsert to DB |
+| POST | /api/v1/weather/fetch | 5/min | Fetch weather (cache-first, OWM on miss) |
 | GET | /health | — | Health check (tests DB connection) |
 
 Rate limits are per IP. Exceeded limits return `429 Too Many Requests`.
 
 All endpoints (except `/health`) require the `x-internal-token` header matching `INTERNAL_API_TOKEN` from `.env`.
 
-Interactive docs are available at `http://localhost:8000/docs` — click **Authorize** and enter the token once to authenticate all requests from the UI.
+Interactive docs: `http://localhost:8000/docs` — click **Authorize** and enter the token once.
 
 ---
 
-## Post-spec Changes & Design Decisions
+## Design Decisions & Trade-offs
 
-The initial spec was a boilerplate scaffold. The following decisions were made during implementation
-and are documented here with the reasoning behind each.
+### Cache-first search with 30-minute TTL
+
+**Problem**: every user search hit the OWM API directly. This burned quota on duplicate searches,
+returned no result when OWM was down, and overwrote manual user edits immediately.
+
+**Solution**: `POST /fetch` first checks the DB. If the record exists and `last_updated < 30 min`,
+it's returned without calling OWM. Only stale or missing records trigger an OWM call.
+
+**Trade-off**: a user searching a city may get data up to 30 minutes old. Acceptable for weather,
+where significant changes within 30 minutes are uncommon and the sliding window keeps active cities fresh.
+
+### Sliding window background refresh
+
+**Problem**: proactively refreshing every record in the DB (original APScheduler approach) was
+wasteful — most records are cold and won't be searched again soon.
+
+**Solution**: Celery Beat runs `refresh_sliding_window` every 10 minutes. It queries records where
+`30 min ≤ last_updated ≤ 60 min` — recently active but about to go stale. These are refreshed
+proactively so the next search hits the cache. Records older than 60 minutes are skipped; if someone
+searches them, they trigger an on-demand OWM call.
+
+**Trade-off**: a city searched once and then not searched for over an hour will be refreshed
+on-demand, adding ~200–800ms latency to that request. This is the right trade-off: OWM quota is
+finite, and pre-refreshing cold data wastes it.
+
+### Manual edits vs. background refresh conflict
+
+**Known limitation**: when a user manually edits a weather record, `last_updated` is set to now.
+For the next 30 minutes, searches return the edited data from DB. After 30 minutes, the sliding
+window or an on-demand search will overwrite the edit with fresh OWM data.
+
+A proper fix would require an `is_manually_edited` flag (or separate `edited_at` column) so the
+refresh logic can skip manually-edited records. This is left as a known trade-off pending a decision
+on edit history semantics.
+
+### APScheduler → Celery + Redis
+
+APScheduler ran inside the FastAPI process. This works for a single instance but breaks under
+horizontal scaling — every instance runs its own scheduler, leading to duplicate OWM calls and
+race conditions on upserts.
+
+Celery Beat is a separate process with a single scheduler. Workers are independently scalable.
+Redis acts as the message broker and result backend. The cost is two extra containers (`celery-worker`,
+`celery-beat`) and a Redis instance — justified even at this scale because it correctly models
+the architecture.
 
 ### Node.js 20 → 24
 
-The spec stated Node 20. Changed to Node 24 (Active LTS) because:
-- Node 20 reaches EOL April 2026
-- Node 25 is an odd-numbered "Current" release — not LTS, short-lived, not suitable for production
-- Even-numbered versions are LTS in Node.js; 24 is the current Active LTS
+Node 20 reaches EOL April 2026. Node 24 is the current Active LTS.
+(Node 25 is an odd-numbered "Current" release — not LTS, not suitable for production.)
 
-### Rate limiting (slowapi)
+### Rate limiting — shared Limiter instance
 
-Not in the original spec. Added with differentiated limits:
-- **GET endpoints: 20/min** — read-only, cheap queries, reasonable headroom
-- **POST/PUT/DELETE: 5/min** — write operations, hit external API or modify DB state
+The original scaffold created a `Limiter` in both `main.py` and `routers/weather.py`. Two
+independent instances meant counters were never shared — limits were silently broken. Fixed by
+extracting a single shared instance to `app/limiter.py`.
 
-The asymmetry is intentional. `POST /fetch` in particular calls OWM on every request.
-OWM free tier allows 60 calls/minute — 5/min per IP gives headroom for multiple users
-without risking quota exhaustion.
+### Differentiated rate limits
 
-### OWM error handling
+- **GET /popular: 60/min** — pure DB read, no external calls, cheap
+- **GET endpoints: 20/min** — DB reads, reasonable headroom
+- **POST/PUT/DELETE: 5/min** — write operations; `POST /fetch` calls OWM
 
-The original spec had a single catch-all `502` for all non-200 OWM responses.
-Expanded to distinguish:
-
-| OWM status | Returned to client | Reason |
-|---|---|---|
-| 401 | 503 | Invalid/expired API key — operator error, not client error |
-| 403 | 503 | Resource requires paid plan |
-| 404 | 404 | City not found — pass through |
-| 429 | 429 | OWM rate limit hit — pass through so caller knows to back off |
-| 500/502/503 | 502 | OWM is down |
-| Timeout | 504 | OWM did not respond within 10s |
-
-401/403 return 503 (not 401/403) because these are operator-side configuration errors,
-not client authentication errors. The client did nothing wrong.
-
-### Invalid JSON from OWM
-
-`resp.json()` raises `aiohttp.ContentTypeError` or `json.JSONDecodeError` if OWM returns
-malformed content (happens during their DDoS protection or maintenance windows, when they
-serve HTML error pages instead of JSON). Without handling this, the error surfaces as
-an unhandled 500. Fixed with a dedicated `_parse_json` method that:
-- Uses `content_type=None` to not fail on wrong Content-Type headers
-- Logs the first 200 chars of the raw response for debugging
-- Returns a clean `502` to the client
-
-### Docker healthcheck + depends_on condition
-
-Original compose had `depends_on: [db]` which only waits for the container to start,
-not for Postgres to be ready to accept connections. On slow machines or first boot,
-the backend would start before Postgres finished initializing and crash.
-
-Fixed:
-- Added `healthcheck` on db using `pg_isready`
-- Changed backend `depends_on` to `condition: service_healthy`
-
-This guarantees the backend only starts after Postgres is accepting connections.
-
-### /health endpoint
-
-Original `/health` returned a static `{"status": "ok"}` — useless for real health monitoring
-since it doesn't reflect whether the service can actually serve requests.
-
-Updated to run `SELECT 1` against the DB on every call, wrapped in a 3-second timeout:
-- `200 {"status": "ok", "db": "ok"}` — service is fully operational
-- `503 "Service unavailable: database unreachable"` — DB unreachable or timed out
-
-This makes `/health` meaningful for load balancers, uptime monitors, and k8s readiness probes.
+OWM free tier allows 60 calls/minute across all IPs. 5/min per IP gives headroom for concurrent users.
 
 ### Security hardening
 
-Several hardening measures applied after initial implementation:
+- **Timing-safe token comparison**: `secrets.compare_digest()` instead of `==`. String equality
+  short-circuits on the first mismatched byte, leaking token information through response time.
+- **Required secrets at startup**: `Field(...)` in pydantic settings causes the app to crash
+  immediately if `OPENWEATHER_API_KEY` or `INTERNAL_API_TOKEN` are missing. Eliminates the
+  "silently running with placeholder credentials" failure mode.
+- **UUID validation in BFF**: the `[id]` route validates UUID format before forwarding to the backend.
+- **Zod bounds on edit form**: temperature (−100..60°C), humidity (0..100%), pressure (870..1084 hPa).
+  City/country/coordinates excluded from the edit schema — no reason for a user to change them.
 
-- **Token comparison**: `x-internal-token` validation uses `secrets.compare_digest()` instead
-  of `==` to prevent timing attacks. String equality short-circuits on the first mismatched
-  byte, leaking information about token length and content through response time differences.
+### /health endpoint
 
-- **Required secrets**: `OPENWEATHER_API_KEY` and `INTERNAL_API_TOKEN` have no default values.
-  Pydantic `Field(...)` causes the app to crash at startup if either is missing from the
-  environment. Previously both had placeholder defaults (`"your_key_here"`, `"change_me_in_prod"`)
-  meaning a missing `.env` file would silently start the app in an insecure state.
+Original returned `{"status": "ok"}` statically — meaningless for real health monitoring.
+Updated to run `SELECT 1` with a 3-second timeout:
+- `200 {"status": "ok", "db": "ok"}` — fully operational
+- `503` — DB unreachable
 
-### Rate limiter
-
-The original implementation created a `Limiter` instance in both `main.py` and `routers/weather.py`.
-Two independent instances meant rate limit counters were never shared — limits were silently broken.
-
-Fixed by extracting the single shared instance to `app/limiter.py`, imported by both modules.
+Useful for load balancers, uptime monitors, and k8s readiness probes.
 
 ---
 
-## Intentionally Omitted from the Spec
+## Intentionally Omitted
 
-These are production concerns that were left out of the boilerplate spec deliberately.
-They would be added before a real production deployment:
+Production concerns explicitly left out of scope:
 
-- **Authentication/Authorization** — no JWT, no API keys on the backend. The `x-internal-token`
-  header in the BFF is a placeholder, not real auth.
-- **Circuit breaker for OWM** — if OWM is down, every request still tries to hit it and fails.
-  A circuit breaker (e.g. with `aiobreaker`) would fail fast after N consecutive failures.
-- **Retry with exponential backoff** — transient OWM errors (502/503/timeout) are not retried.
-  A single failure returns an error to the client immediately.
-- **DB connection health in lifespan** — startup does not verify DB connectivity. If the DB is
-  misconfigured, the backend starts successfully and only fails on the first real request.
-- **Structured logging / tracing** — logs are plaintext. No request IDs, no correlation between
-  frontend → BFF → backend → OWM calls. Makes debugging distributed issues harder.
-- **Pagination on GET /weather** — returns all records. Will degrade with large datasets.
+- **Authentication/Authorization** — `x-internal-token` is a shared secret between BFF and backend, not per-user auth. No JWT, no sessions.
+- **Circuit breaker for OWM** — after N consecutive OWM failures, a circuit breaker would stop calling OWM entirely and serve cached data. Currently every stale request still attempts OWM.
+- **Retry with exponential backoff** — transient OWM errors (502/503/timeout) return immediately to the client without retry.
+- **Edit history / conflict resolution** — manual edits are overwritten by background refresh after 30 min. Requires `is_manually_edited` flag or a separate edits table.
+- **Pagination on GET /weather** — returns all records unbounded.
+- **Structured logging / tracing** — no request IDs, no correlation across BFF → backend → OWM hops.
 
 ---
 
@@ -214,39 +232,46 @@ They would be added before a real production deployment:
 weather-app/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py           # App entry, lifespan, middleware, health check
-│   │   ├── config.py         # Pydantic settings (reads from .env, required fields fail fast)
-│   │   ├── limiter.py        # Shared slowapi Limiter instance (imported by main + router)
+│   │   ├── main.py           # App entry, lifespan (seed), middleware, health check
+│   │   ├── config.py         # Pydantic settings (required fields, extra=ignore)
+│   │   ├── constants.py      # POPULAR_CITIES list, cache TTL, window bounds
+│   │   ├── limiter.py        # Shared slowapi Limiter instance
 │   │   ├── database.py       # Async SQLAlchemy engine, session factory, get_db DI
 │   │   ├── logger.py         # Logging setup
-│   │   ├── models/           # SQLAlchemy ORM models (Weather with unique constraint)
-│   │   ├── schemas/          # Pydantic v2 schemas (WeatherCreate, WeatherResponse, etc.)
-│   │   ├── repositories/     # Abstract base + SQLAlchemy async repository (upsert via ON CONFLICT)
-│   │   ├── services/         # OWM fetcher (aiohttp, error handling, JSON validation)
+│   │   ├── models/           # SQLAlchemy ORM models
+│   │   ├── schemas/          # Pydantic v2 schemas
+│   │   ├── repositories/     # Abstract base + SQLAlchemy async impl (upsert, sliding window)
+│   │   ├── services/         # WeatherFetcherService (freshness check, OWM, cache fallback)
 │   │   ├── routers/          # FastAPI route handlers with per-endpoint rate limits
-│   │   └── tasks/            # APScheduler background refresh job
+│   │   └── tasks/
+│   │       ├── celery_app.py      # Celery app + beat schedule
+│   │       └── weather_tasks.py   # refresh_popular_cities + refresh_sliding_window
 │   ├── migrations/           # Alembic async migrations
-│   ├── tests/                # pytest-asyncio test suite
+│   ├── tests/                # pytest-asyncio: repository, routes, service unit tests
 │   ├── Dockerfile
-│   ├── requirements.txt
-│   └── .env
+│   └── requirements.txt
 ├── frontend/
 │   └── src/
 │       ├── app/
-│       │   ├── page.tsx              # Search form page
-│       │   ├── result/page.tsx       # Weather result page (temperature-based bg color)
-│       │   └── api/weather/route.ts  # BFF route handler (proxies to FastAPI)
+│       │   ├── page.tsx                      # Home: popular grid + recent searches + search form
+│       │   ├── result/page.tsx               # Full weather result page
+│       │   └── api/weather/
+│       │       ├── route.ts                  # BFF: POST /fetch, GET all
+│       │       ├── popular/route.ts          # BFF: GET popular cities
+│       │       └── [id]/route.ts             # BFF: PUT update, DELETE
 │       ├── components/
 │       │   ├── WeatherForm.tsx       # react-hook-form + Zod, city/coords toggle
-│       │   ├── WeatherResult.tsx     # Result display with temperature color coding
+│       │   ├── WeatherResult.tsx     # Full result with temperature color coding
+│       │   ├── CityCard.tsx          # Compact card for grids, optional edit button
+│       │   ├── EditWeatherModal.tsx  # Modal form for manual weather edits
 │       │   ├── Notification.tsx      # react-hot-toast wrapper
-│       │   └── ErrorBoundary.tsx     # Class-based error boundary, wraps all pages
-│       ├── store/weatherStore.ts     # Zustand + sessionStorage persist
+│       │   └── ErrorBoundary.tsx     # Class-based error boundary
+│       ├── store/weatherStore.ts     # Zustand + sessionStorage (recent searches, current result)
 │       ├── lib/
 │       │   ├── api/weatherClient.ts  # All fetch calls (never from components directly)
-│       │   └── validations/          # Zod discriminated union schema
+│       │   └── validations/          # Zod schemas (search + edit forms)
 │       └── types/weather.ts          # TypeScript interfaces matching backend response
-├── docker-compose.yml                # db (healthcheck) + backend + frontend
+├── docker-compose.yml         # db + redis + backend + celery-worker + celery-beat + frontend
 ├── .env.example
 └── README.md
 ```

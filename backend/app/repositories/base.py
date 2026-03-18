@@ -3,6 +3,7 @@ from typing import List, Optional
 import uuid
 from app.models.weather import Weather
 from app.schemas.weather import WeatherCreate, WeatherUpdate
+from datetime import datetime
 
 
 class BaseWeatherRepository(ABC):
@@ -20,6 +21,14 @@ class BaseWeatherRepository(ABC):
 
     @abstractmethod
     async def get_all(self) -> List[Weather]:
+        pass
+
+    @abstractmethod
+    async def get_top_cities(self) -> List[Weather]:
+        pass
+
+    @abstractmethod
+    async def get_stale_in_window(self, older_than: datetime, newer_than: datetime) -> List[Weather]:
         pass
 
     @abstractmethod

@@ -1,12 +1,14 @@
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 import aiohttp
 from fastapi import HTTPException
 from app.config import Settings
 from app.repositories.weather import SQLAlchemyWeatherRepository
 from app.models.weather import Weather
+from app.constants import CACHE_TTL_MINUTES
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("weather_app.fetcher")
@@ -15,7 +17,14 @@ logger = logging.getLogger("weather_app.fetcher")
 @dataclass
 class WeatherResult:
     data: Weather
-    from_cache: bool
+    from_cache: bool   # True = returned from DB (fresh hit or OWM error fallback)
+    owm_error: bool = field(default=False)  # True = OWM was unavailable; client should know data may be stale
+
+
+def _is_fresh(last_updated: datetime, ttl_minutes: int = CACHE_TTL_MINUTES) -> bool:
+    """Returns True if the record is younger than ttl_minutes."""
+    ts = last_updated if last_updated.tzinfo else last_updated.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - ts) < timedelta(minutes=ttl_minutes)
 
 # Mapping of OWM HTTP status codes to (client-facing status, message).
 # 401/403 are returned as 503 — these are operator configuration errors, not client errors.
@@ -125,37 +134,42 @@ class WeatherFetcherService:
             "weather_icon": data["weather"][0]["icon"],
         }
 
-    # Fetch from OWM by city + upsert. Falls back to cached DB record if OWM fails.
-    # Returns WeatherResult(data, from_cache=False) on live data,
-    # WeatherResult(data, from_cache=True) on stale fallback,
-    # or re-raises the original HTTPException if no cache exists.
+    # Search flow: return cached data if fresh enough, only call OWM when stale or missing.
+    # OWM error fallback: if OWM is unavailable and a record exists (even stale), return it
+    # with owm_error=True so the router can signal the client via X-Cache-Fallback.
     async def fetch_and_upsert(self, city: str, country: str, db_session: AsyncSession) -> WeatherResult:
         repo = SQLAlchemyWeatherRepository(db_session)
+        cached = await repo.get_by_city(city, country)
+        if cached and _is_fresh(cached.last_updated):
+            logger.debug(f"Cache hit (fresh) for city={city},{country}")
+            return WeatherResult(data=cached, from_cache=True, owm_error=False)
         try:
             raw = await self.fetch_by_city(city, country)
             parsed = self._parse_owm_response(raw)
             weather = await repo.upsert(parsed)
             return WeatherResult(data=weather, from_cache=False)
         except HTTPException as exc:
-            cached = await repo.get_by_city(city, country)
             if cached:
                 logger.warning(f"OWM unavailable ({exc.status_code}), serving stale cache for city={city},{country}")
-                return WeatherResult(data=cached, from_cache=True)
+                return WeatherResult(data=cached, from_cache=True, owm_error=True)
             raise
 
-    # Same pattern for coordinate-based lookups.
-    # Nearest-match fallback within 0.5° since OWM returns city-centre coords
+    # Same flow for coordinate-based lookups.
+    # Nearest-match within 0.5° tolerance — OWM returns city-centre coords
     # which rarely match the queried lat/lon exactly.
     async def fetch_and_upsert_by_coords(self, lat: float, lon: float, db_session: AsyncSession) -> WeatherResult:
         repo = SQLAlchemyWeatherRepository(db_session)
+        cached = await repo.get_by_coords(lat, lon)
+        if cached and _is_fresh(cached.last_updated):
+            logger.debug(f"Cache hit (fresh) for lat={lat},lon={lon}")
+            return WeatherResult(data=cached, from_cache=True, owm_error=False)
         try:
             raw = await self.fetch_by_coords(lat, lon)
             parsed = self._parse_owm_response(raw)
             weather = await repo.upsert(parsed)
             return WeatherResult(data=weather, from_cache=False)
         except HTTPException as exc:
-            cached = await repo.get_by_coords(lat, lon)
             if cached:
                 logger.warning(f"OWM unavailable ({exc.status_code}), serving stale cache for lat={lat},lon={lon}")
-                return WeatherResult(data=cached, from_cache=True)
+                return WeatherResult(data=cached, from_cache=True, owm_error=True)
             raise

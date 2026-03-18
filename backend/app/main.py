@@ -13,26 +13,37 @@ from app.limiter import limiter
 from app.config import settings
 from app.logger import setup_logging
 from app.routers.weather import router as weather_router
-from app.tasks.scheduler import scheduler, fetch_all_cities_task
+from app.constants import POPULAR_CITIES
+from app.repositories.weather import SQLAlchemyWeatherRepository
+from app.services.weather_fetcher import WeatherFetcherService
 
 setup_logging()
 logger = logging.getLogger("weather_app")
+
+
+async def _seed_popular_cities(http_client: aiohttp.ClientSession) -> None:
+    """On cold start, fetch any popular cities not yet in the DB so the home page isn't empty."""
+    async with AsyncSessionLocal() as session:
+        repo = SQLAlchemyWeatherRepository(session)
+        fetcher = WeatherFetcherService(http_client, settings)
+        for city, country in POPULAR_CITIES:
+            existing = await repo.get_by_city(city, country)
+            if not existing:
+                try:
+                    await fetcher.fetch_and_upsert(city, country, session)
+                    logger.info(f"Seeded {city}, {country}")
+                except Exception as e:
+                    logger.warning(f"Seed failed for {city}, {country}: {e}")
+        await session.commit()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     app.state.http_client = aiohttp.ClientSession()
-    scheduler.add_job(
-        fetch_all_cities_task,
-        "interval",
-        minutes=settings.SCHEDULER_INTERVAL_MINUTES,
-        args=[app.state.http_client, settings],
-    )
-    scheduler.start()
+    await _seed_popular_cities(app.state.http_client)
     yield
     logger.info("Shutting down...")
-    scheduler.shutdown()
     await app.state.http_client.close()
 
 
