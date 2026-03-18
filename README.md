@@ -9,16 +9,30 @@ stores it in PostgreSQL via SQLAlchemy async, and refreshes data on a configurab
 The core data flow for a weather lookup:
 
 ```
-Browser → Next.js BFF (/api/weather) → FastAPI (/api/v1/weather/fetch) → OpenWeatherMap API
-                                                        │
-                                                        └─► PostgreSQL (upsert)
-                                                              ▲
-                                              APScheduler ────┘ (background refresh every N minutes)
+                                                         ┌─ OWM reachable ──► OpenWeatherMap API
+Browser → Next.js BFF (/api/weather) → FastAPI /fetch ──┤                           │
+               ◄────────────────────────────────────────┤                           ▼
+                                                         │                    PostgreSQL (upsert)
+                                                         │                           │
+                                                         └──────────────────────◄───┘
+                                                         │
+                                                         └─ OWM unreachable ──► PostgreSQL (read)
+                                                                                [X-Cache-Fallback: true]
+
+APScheduler ──────────────────────────────────────────────────────────────────────────────────────
+  (every N min, per city) ──► OpenWeatherMap API ──► PostgreSQL (upsert)
 ```
 
+**Happy path**: OWM returns data → upserted to PostgreSQL → returned to client.
+
+**Cache-aside fallback**: if OWM is unreachable (timeout, 5xx, rate limit), the service reads the
+last known record from PostgreSQL and returns it with an `X-Cache-Fallback: true` response header.
+The client still receives a `200` with stale data rather than an error, as long as a previous
+record exists for that city.
+
 `POST /fetch` is intentionally a POST, not a GET — it performs a write (upsert) on every call.
-The semantics are get-or-create: fetch fresh data from OWM and insert/update in the DB atomically.
-The DB acts as a cache and history store, not the source of truth.
+The semantics are fetch-and-store: get fresh data from OWM and insert/update the DB atomically.
+The DB acts as a write-through cache and history store, not the source of truth.
 
 ---
 
