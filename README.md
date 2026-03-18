@@ -71,9 +71,24 @@ tab is open. They are deduplicated by city+country and capped at 5 recent entrie
 
 ## Quick Start
 
+**1. Backend** — create `backend/.env`:
+```env
+OPENWEATHER_API_KEY=your_key_here
+INTERNAL_API_TOKEN=change_me_in_prod
+DATABASE_URL=postgresql+asyncpg://weather:weather@db:5432/weather
+REDIS_URL=redis://redis:6379/0
+```
+
+**2. Frontend** — create `frontend/.env.local`:
+```env
+BACKEND_URL=http://backend:8000
+INTERNAL_API_TOKEN=change_me_in_prod
+```
+
+> `INTERNAL_API_TOKEN` must match in both files.
+
+**3. Start:**
 ```bash
-cp .env.example backend/.env
-# Edit backend/.env: set OPENWEATHER_API_KEY and INTERNAL_API_TOKEN
 docker compose up --build
 ```
 
