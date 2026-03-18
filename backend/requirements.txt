@@ -9,5 +9,4 @@ apscheduler>=3.10,<4.0
 pytest
 pytest-asyncio
 httpx
-aiosqlite
 slowapi

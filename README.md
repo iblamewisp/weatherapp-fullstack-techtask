@@ -45,11 +45,17 @@ docker compose up --build
 
 ## Run Tests
 
+Backend tests run against a real PostgreSQL instance (`weather_test` database).
+The test fixture creates this database automatically on first run.
+
 ```bash
-# Backend
+# Start the database (if not already running)
+docker compose up -d db
+
+# Backend — repository, route, and service tests
 docker compose exec backend pytest
 
-# Frontend (requires Node.js 24 installed locally)
+# Frontend — validation, store, API client, and BFF route tests
 cd frontend && npm test
 ```
 
@@ -180,9 +186,6 @@ They would be added before a real production deployment:
   misconfigured, the backend starts successfully and only fails on the first real request.
 - **Structured logging / tracing** — logs are plaintext. No request IDs, no correlation between
   frontend → BFF → backend → OWM calls. Makes debugging distributed issues harder.
-- **Frontend error boundaries** — ~~the React app has no error boundary components~~ Added: `ErrorBoundary`
-  class component wraps all pages in the root layout. Unhandled render errors show a recoverable
-  fallback with a "Try again" reset instead of a blank screen.
 - **Pagination on GET /weather** — returns all records. Will degrade with large datasets.
 
 ---

@@ -1,13 +1,21 @@
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 import aiohttp
 from fastapi import HTTPException
 from app.config import Settings
 from app.repositories.weather import SQLAlchemyWeatherRepository
+from app.models.weather import Weather
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("weather_app.fetcher")
+
+
+@dataclass
+class WeatherResult:
+    data: Weather
+    from_cache: bool
 
 # Mapping of OWM HTTP status codes to (client-facing status, message).
 # 401/403 are returned as 503 — these are operator configuration errors, not client errors.
@@ -117,11 +125,37 @@ class WeatherFetcherService:
             "weather_icon": data["weather"][0]["icon"],
         }
 
-    # Convenience method: fetch from OWM by city + upsert into DB in one call.
-    # Used by POST /fetch and the background scheduler.
-    async def fetch_and_upsert(self, city: str, country: str, db_session: AsyncSession) -> dict:
-        raw = await self.fetch_by_city(city, country)
-        parsed = self._parse_owm_response(raw)
+    # Fetch from OWM by city + upsert. Falls back to cached DB record if OWM fails.
+    # Returns WeatherResult(data, from_cache=False) on live data,
+    # WeatherResult(data, from_cache=True) on stale fallback,
+    # or re-raises the original HTTPException if no cache exists.
+    async def fetch_and_upsert(self, city: str, country: str, db_session: AsyncSession) -> WeatherResult:
         repo = SQLAlchemyWeatherRepository(db_session)
-        weather = await repo.upsert(parsed)
-        return weather
+        try:
+            raw = await self.fetch_by_city(city, country)
+            parsed = self._parse_owm_response(raw)
+            weather = await repo.upsert(parsed)
+            return WeatherResult(data=weather, from_cache=False)
+        except HTTPException as exc:
+            cached = await repo.get_by_city(city, country)
+            if cached:
+                logger.warning(f"OWM unavailable ({exc.status_code}), serving stale cache for city={city},{country}")
+                return WeatherResult(data=cached, from_cache=True)
+            raise
+
+    # Same pattern for coordinate-based lookups.
+    # Nearest-match fallback within 0.5° since OWM returns city-centre coords
+    # which rarely match the queried lat/lon exactly.
+    async def fetch_and_upsert_by_coords(self, lat: float, lon: float, db_session: AsyncSession) -> WeatherResult:
+        repo = SQLAlchemyWeatherRepository(db_session)
+        try:
+            raw = await self.fetch_by_coords(lat, lon)
+            parsed = self._parse_owm_response(raw)
+            weather = await repo.upsert(parsed)
+            return WeatherResult(data=weather, from_cache=False)
+        except HTTPException as exc:
+            cached = await repo.get_by_coords(lat, lon)
+            if cached:
+                logger.warning(f"OWM unavailable ({exc.status_code}), serving stale cache for lat={lat},lon={lon}")
+                return WeatherResult(data=cached, from_cache=True)
+            raise

@@ -15,6 +15,10 @@ class BaseWeatherRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_by_coords(self, lat: float, lon: float, tolerance: float = 0.5) -> Optional[Weather]:
+        pass
+
+    @abstractmethod
     async def get_all(self) -> List[Weather]:
         pass
 

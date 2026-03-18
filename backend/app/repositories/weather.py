@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 from app.models.weather import Weather
@@ -22,6 +22,23 @@ class SQLAlchemyWeatherRepository(BaseWeatherRepository):
     async def get_by_city(self, city: str, country: str) -> Optional[Weather]:
         return await self.session.scalar(
             select(Weather).where(Weather.city == city, Weather.country == country.upper())
+        )
+
+    # Nearest-match lookup within a lat/lon bounding box.
+    # OWM returns city-centre coordinates which rarely match the queried coords exactly,
+    # so we find the closest stored record within `tolerance` degrees on each axis,
+    # ordered by Manhattan distance to prefer the best available match.
+    async def get_by_coords(self, lat: float, lon: float, tolerance: float = 0.5) -> Optional[Weather]:
+        return await self.session.scalar(
+            select(Weather)
+            .where(
+                Weather.latitude.between(lat - tolerance, lat + tolerance),
+                Weather.longitude.between(lon - tolerance, lon + tolerance),
+            )
+            .order_by(
+                func.abs(Weather.latitude - lat) + func.abs(Weather.longitude - lon)
+            )
+            .limit(1)
         )
 
     # session.scalars() returns all matching ORM objects as a sequence.
@@ -83,7 +100,9 @@ class SQLAlchemyWeatherRepository(BaseWeatherRepository):
             },
         )
         stmt = stmt.returning(Weather)
-        result = await self.session.execute(stmt)
+        result = await self.session.execute(
+            stmt, execution_options={"populate_existing": True}
+        )
         weather = result.scalars().first()
         await self.session.flush()
         return weather

@@ -1,8 +1,7 @@
 import uuid
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.responses import Response
 from app.database import get_db
 from app.limiter import limiter
 from app.repositories.weather import SQLAlchemyWeatherRepository
@@ -67,15 +66,17 @@ async def delete_weather(request: Request, id: uuid.UUID, db: AsyncSession = Dep
 @limiter.limit("5/minute")
 async def fetch_weather(
     request: Request,
+    response: Response,
     body: Union[CityQuery, CoordinatesQuery],
     db: AsyncSession = Depends(get_db),
 ):
     fetcher = get_fetcher(request)
     if isinstance(body, CityQuery):
-        weather = await fetcher.fetch_and_upsert(body.city, body.country, db)
+        result = await fetcher.fetch_and_upsert(body.city, body.country, db)
     else:
-        raw = await fetcher.fetch_by_coords(body.latitude, body.longitude)
-        parsed = fetcher._parse_owm_response(raw)
-        repo = SQLAlchemyWeatherRepository(db)
-        weather = await repo.upsert(parsed)
-    return weather
+        result = await fetcher.fetch_and_upsert_by_coords(body.latitude, body.longitude, db)
+
+    if result.from_cache:
+        response.headers["X-Cache-Fallback"] = "true"
+
+    return result.data
