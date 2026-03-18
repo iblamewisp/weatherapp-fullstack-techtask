@@ -61,10 +61,10 @@ class SQLAlchemyWeatherRepository(BaseWeatherRepository):
     # Returns only the fixed popular cities from the DB (whatever Celery Beat has refreshed).
     # Uses OR of AND conditions — SQLAlchemy can't do tuple IN natively across dialects.
     async def get_top_cities(self) -> List[Weather]:
-        from app.constants import POPULAR_CITIES
+        from app.config import settings
         conditions = [
             and_(Weather.city == city, Weather.country == country)
-            for city, country in POPULAR_CITIES
+            for city, country in settings.POPULAR_CITIES
         ]
         result = await self.session.scalars(select(Weather).where(or_(*conditions)))
         return list(result.all())

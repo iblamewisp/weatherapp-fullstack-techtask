@@ -6,7 +6,6 @@ from app.tasks.celery_app import celery_app
 from app.database import AsyncSessionLocal
 from app.repositories.weather import SQLAlchemyWeatherRepository
 from app.services.weather_fetcher import WeatherFetcherService
-from app.constants import POPULAR_CITIES, STALE_MIN_MINUTES, STALE_MAX_MINUTES
 from app.config import settings
 
 logger = logging.getLogger("weather_app.tasks")
@@ -23,7 +22,7 @@ async def _do_refresh():
     async with aiohttp.ClientSession() as http_client:
         async with AsyncSessionLocal() as session:
             fetcher = WeatherFetcherService(http_client, settings)
-            for city, country in POPULAR_CITIES:
+            for city, country in settings.POPULAR_CITIES:
                 try:
                     # Bypass freshness check — always fetch live data for popular cities.
                     raw = await fetcher.fetch_by_city(city, country)
@@ -45,9 +44,9 @@ def refresh_sliding_window():
 
 async def _do_sliding_window():
     now = datetime.now(timezone.utc)
-    older_than = now - timedelta(minutes=STALE_MAX_MINUTES)
-    newer_than = now - timedelta(minutes=STALE_MIN_MINUTES)
-    logger.info(f"Sliding window: refreshing records between {STALE_MIN_MINUTES} and {STALE_MAX_MINUTES} min old")
+    older_than = now - timedelta(minutes=settings.STALE_MAX_MINUTES)
+    newer_than = now - timedelta(minutes=settings.STALE_MIN_MINUTES)
+    logger.info(f"Sliding window: refreshing records between {settings.STALE_MIN_MINUTES} and {settings.STALE_MAX_MINUTES} min old")
     async with aiohttp.ClientSession() as http_client:
         async with AsyncSessionLocal() as session:
             repo = SQLAlchemyWeatherRepository(session)

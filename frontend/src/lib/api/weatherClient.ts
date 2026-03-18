@@ -35,6 +35,19 @@ export const weatherClient = {
     return res.json();
   },
 
+  createRecord: async (data: Partial<WeatherResponse>): Promise<WeatherResponse> => {
+    const res = await fetch(`${BASE}/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to create record");
+    }
+    return res.json();
+  },
+
   getPopular: async (): Promise<WeatherResponse[]> => {
     const res = await fetch(`${BASE}/popular`);
     if (!res.ok) throw new Error("Failed to fetch popular cities");

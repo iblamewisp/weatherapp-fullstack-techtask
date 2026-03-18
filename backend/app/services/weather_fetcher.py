@@ -8,7 +8,6 @@ from fastapi import HTTPException
 from app.config import Settings
 from app.repositories.weather import SQLAlchemyWeatherRepository
 from app.models.weather import Weather
-from app.constants import CACHE_TTL_MINUTES
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("weather_app.fetcher")
@@ -21,7 +20,7 @@ class WeatherResult:
     owm_error: bool = field(default=False)  # True = OWM was unavailable; client should know data may be stale
 
 
-def _is_fresh(last_updated: datetime, ttl_minutes: int = CACHE_TTL_MINUTES) -> bool:
+def _is_fresh(last_updated: datetime, ttl_minutes: int = 30) -> bool:
     """Returns True if the record is younger than ttl_minutes."""
     ts = last_updated if last_updated.tzinfo else last_updated.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - ts) < timedelta(minutes=ttl_minutes)
@@ -140,7 +139,7 @@ class WeatherFetcherService:
     async def fetch_and_upsert(self, city: str, country: str, db_session: AsyncSession) -> WeatherResult:
         repo = SQLAlchemyWeatherRepository(db_session)
         cached = await repo.get_by_city(city, country)
-        if cached and _is_fresh(cached.last_updated):
+        if cached and _is_fresh(cached.last_updated, self.settings.CACHE_TTL_MINUTES):
             logger.debug(f"Cache hit (fresh) for city={city},{country}")
             return WeatherResult(data=cached, from_cache=True, owm_error=False)
         try:
@@ -160,7 +159,7 @@ class WeatherFetcherService:
     async def fetch_and_upsert_by_coords(self, lat: float, lon: float, db_session: AsyncSession) -> WeatherResult:
         repo = SQLAlchemyWeatherRepository(db_session)
         cached = await repo.get_by_coords(lat, lon)
-        if cached and _is_fresh(cached.last_updated):
+        if cached and _is_fresh(cached.last_updated, self.settings.CACHE_TTL_MINUTES):
             logger.debug(f"Cache hit (fresh) for lat={lat},lon={lon}")
             return WeatherResult(data=cached, from_cache=True, owm_error=False)
         try:

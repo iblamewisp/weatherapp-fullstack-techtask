@@ -12,6 +12,7 @@ interface WeatherStore {
   setWeatherData: (data: WeatherResponse) => void;
   addRecentSearch: (data: WeatherResponse) => void;
   updateRecentSearch: (updated: WeatherResponse) => void;
+  removeRecentSearch: (id: string) => void;
   setLoading: (v: boolean) => void;
   setError: (e: string | null) => void;
   reset: () => void;
@@ -38,6 +39,10 @@ export const useWeatherStore = create<WeatherStore>()(
           recentSearches: state.recentSearches.map((r) =>
             r.id === updated.id ? updated : r
           ),
+        })),
+      removeRecentSearch: (id) =>
+        set((state) => ({
+          recentSearches: state.recentSearches.filter((r) => r.id !== id),
         })),
       setLoading: (v) => set({ isLoading: v }),
       setError: (e) => set({ error: e, isLoading: false }),

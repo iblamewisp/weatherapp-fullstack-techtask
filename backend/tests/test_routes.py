@@ -152,6 +152,55 @@ async def test_fetch_city_owm_fails_no_cache_raises(client):
 
 
 # ---------------------------------------------------------------------------
+# POST /weather — bare record creation (no OWM)
+# ---------------------------------------------------------------------------
+
+async def test_create_weather_returns_201(client):
+    weather = make_weather_obj()
+    with patch("app.routers.weather.SQLAlchemyWeatherRepository") as MockRepo:
+        MockRepo.return_value.create = AsyncMock(return_value=weather)
+        resp = await client.post("/api/v1/weather", json={"city": "London", "country": "GB"})
+    assert resp.status_code == 201
+    assert resp.json()["city"] == "London"
+
+
+async def test_create_weather_invalid_country_rejected(client):
+    resp = await client.post("/api/v1/weather", json={"city": "London", "country": "TOOLONG"})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# PUT /weather/{id}
+# ---------------------------------------------------------------------------
+
+async def test_update_weather_returns_200(client):
+    weather = make_weather_obj(temperature=20.0)
+    with patch("app.routers.weather.SQLAlchemyWeatherRepository") as MockRepo:
+        MockRepo.return_value.update = AsyncMock(return_value=weather)
+        resp = await client.put(f"/api/v1/weather/{uuid.uuid4()}", json={"temperature": 20.0})
+    assert resp.status_code == 200
+    assert resp.json()["temperature"] == 20.0
+
+
+async def test_update_weather_not_found(client):
+    with patch("app.routers.weather.SQLAlchemyWeatherRepository") as MockRepo:
+        MockRepo.return_value.update = AsyncMock(return_value=None)
+        resp = await client.put(f"/api/v1/weather/{uuid.uuid4()}", json={"temperature": 20.0})
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DELETE /weather/{id} — success path
+# ---------------------------------------------------------------------------
+
+async def test_delete_weather_returns_204(client):
+    with patch("app.routers.weather.SQLAlchemyWeatherRepository") as MockRepo:
+        MockRepo.return_value.delete = AsyncMock(return_value=True)
+        resp = await client.delete(f"/api/v1/weather/{uuid.uuid4()}")
+    assert resp.status_code == 204
+
+
+# ---------------------------------------------------------------------------
 # GET /weather/popular
 # ---------------------------------------------------------------------------
 

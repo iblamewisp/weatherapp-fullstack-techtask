@@ -13,7 +13,6 @@ from app.limiter import limiter
 from app.config import settings
 from app.logger import setup_logging
 from app.routers.weather import router as weather_router
-from app.constants import POPULAR_CITIES
 from app.repositories.weather import SQLAlchemyWeatherRepository
 from app.services.weather_fetcher import WeatherFetcherService
 
@@ -26,7 +25,7 @@ async def _seed_popular_cities(http_client: aiohttp.ClientSession) -> None:
     async with AsyncSessionLocal() as session:
         repo = SQLAlchemyWeatherRepository(session)
         fetcher = WeatherFetcherService(http_client, settings)
-        for city, country in POPULAR_CITIES:
+        for city, country in settings.POPULAR_CITIES:
             existing = await repo.get_by_city(city, country)
             if not existing:
                 try:
