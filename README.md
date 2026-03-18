@@ -94,8 +94,7 @@ docker compose up -d db
 docker compose exec backend pytest
 
 # Frontend — BFF route and API client tests (Docker)
-docker build --target test -t frontend-test ./frontend
-docker run --rm frontend-test
+docker build --target test -t frontend-test ./frontend && docker run --rm frontend-test
 
 # Frontend — local
 cd frontend && npm test
