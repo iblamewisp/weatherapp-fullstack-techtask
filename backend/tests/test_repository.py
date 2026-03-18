@@ -1,8 +1,10 @@
 import os
 import pytest
-from sqlalchemy import text
+from datetime import datetime, timezone, timedelta
+from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.database import Base
+from app.models.weather import Weather
 from app.repositories.weather import SQLAlchemyWeatherRepository
 from app.schemas.weather import WeatherCreate, WeatherUpdate
 
@@ -155,6 +157,75 @@ async def test_get_by_coords_outside_tolerance_returns_none(session):
     repo = SQLAlchemyWeatherRepository(session)
     await repo.create(WeatherCreate(city="London", country="GB", latitude=51.5074, longitude=-0.1278))
     assert await repo.get_by_coords(40.0, 10.0) is None
+
+
+# ---------------------------------------------------------------------------
+# get_top_cities
+# ---------------------------------------------------------------------------
+
+async def test_get_top_cities_returns_only_popular(session):
+    """Only cities from POPULAR_CITIES are returned, not arbitrary ones."""
+    repo = SQLAlchemyWeatherRepository(session)
+    await repo.create(WeatherCreate(city="London", country="GB"))
+    await repo.create(WeatherCreate(city="Reykjavik", country="IS"))  # not in popular list
+    results = await repo.get_top_cities()
+    cities = {r.city for r in results}
+    assert "London" in cities
+    assert "Reykjavik" not in cities
+
+
+async def test_get_top_cities_empty_when_none_seeded(session):
+    repo = SQLAlchemyWeatherRepository(session)
+    results = await repo.get_top_cities()
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# get_stale_in_window
+# ---------------------------------------------------------------------------
+
+async def _set_last_updated(session, city: str, country: str, age_minutes: int):
+    """Helper: backdates last_updated for a record to simulate staleness."""
+    ts = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
+    await session.execute(
+        update(Weather)
+        .where(Weather.city == city, Weather.country == country)
+        .values(last_updated=ts)
+    )
+    await session.flush()
+
+
+async def test_get_stale_in_window_returns_records_in_range(session):
+    repo = SQLAlchemyWeatherRepository(session)
+    await repo.create(WeatherCreate(city="Paris", country="FR"))
+    await _set_last_updated(session, "Paris", "FR", age_minutes=45)
+
+    older_than = datetime.now(timezone.utc) - timedelta(minutes=60)
+    newer_than = datetime.now(timezone.utc) - timedelta(minutes=30)
+    results = await repo.get_stale_in_window(older_than, newer_than)
+    assert any(r.city == "Paris" for r in results)
+
+
+async def test_get_stale_in_window_excludes_fresh_records(session):
+    repo = SQLAlchemyWeatherRepository(session)
+    await repo.create(WeatherCreate(city="Berlin", country="DE"))
+    # last_updated is just now — within the fresh zone, outside the window
+
+    older_than = datetime.now(timezone.utc) - timedelta(minutes=60)
+    newer_than = datetime.now(timezone.utc) - timedelta(minutes=30)
+    results = await repo.get_stale_in_window(older_than, newer_than)
+    assert not any(r.city == "Berlin" for r in results)
+
+
+async def test_get_stale_in_window_excludes_too_old_records(session):
+    repo = SQLAlchemyWeatherRepository(session)
+    await repo.create(WeatherCreate(city="Tokyo", country="JP"))
+    await _set_last_updated(session, "Tokyo", "JP", age_minutes=90)  # older than window
+
+    older_than = datetime.now(timezone.utc) - timedelta(minutes=60)
+    newer_than = datetime.now(timezone.utc) - timedelta(minutes=30)
+    results = await repo.get_stale_in_window(older_than, newer_than)
+    assert not any(r.city == "Tokyo" for r in results)
 
 
 async def test_get_by_coords_returns_nearest(session):

@@ -23,8 +23,8 @@ def make_weather_obj(**overrides):
         "wind_speed": 5.0,
         "weather_description": "light rain",
         "weather_icon": "10d",
-        "last_updated": datetime.now(timezone.utc).isoformat(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_updated": datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone.utc),
     }
     obj = MagicMock()
     for k, v in {**defaults, **overrides}.items():
@@ -114,20 +114,30 @@ async def test_fetch_by_coords_returns_200(client):
 # ---------------------------------------------------------------------------
 
 async def test_fetch_city_owm_fails_returns_cache(client):
-    """OWM is down but cached data exists — should return 200 with X-Cache-Fallback header."""
+    """OWM is down but cached data exists — 200 with X-Cache-Fallback header."""
     cached = make_weather_obj()
     with patch("app.routers.weather.WeatherFetcherService.fetch_and_upsert", new_callable=AsyncMock) as mock:
-        mock.return_value = WeatherResult(data=cached, from_cache=True)
+        mock.return_value = WeatherResult(data=cached, from_cache=True, owm_error=True)
         resp = await client.post("/api/v1/weather/fetch", json={"city": "London", "country": "GB"})
     assert resp.status_code == 200
     assert resp.headers.get("X-Cache-Fallback") == "true"
+
+
+async def test_fetch_city_fresh_cache_no_fallback_header(client):
+    """Fresh DB cache hit — 200 but NO X-Cache-Fallback header (OWM was not involved)."""
+    cached = make_weather_obj()
+    with patch("app.routers.weather.WeatherFetcherService.fetch_and_upsert", new_callable=AsyncMock) as mock:
+        mock.return_value = WeatherResult(data=cached, from_cache=True, owm_error=False)
+        resp = await client.post("/api/v1/weather/fetch", json={"city": "London", "country": "GB"})
+    assert resp.status_code == 200
+    assert "X-Cache-Fallback" not in resp.headers
 
 
 async def test_fetch_coords_owm_fails_returns_cache(client):
     """Coords path: OWM down, nearest cached record returned."""
     cached = make_weather_obj()
     with patch("app.routers.weather.WeatherFetcherService.fetch_and_upsert_by_coords", new_callable=AsyncMock) as mock:
-        mock.return_value = WeatherResult(data=cached, from_cache=True)
+        mock.return_value = WeatherResult(data=cached, from_cache=True, owm_error=True)
         resp = await client.post("/api/v1/weather/fetch", json={"latitude": 51.5, "longitude": -0.12})
     assert resp.status_code == 200
     assert resp.headers.get("X-Cache-Fallback") == "true"
@@ -139,6 +149,19 @@ async def test_fetch_city_owm_fails_no_cache_raises(client):
         mock.side_effect = HTTPException(status_code=502, detail="OWM unavailable")
         resp = await client.post("/api/v1/weather/fetch", json={"city": "London", "country": "GB"})
     assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# GET /weather/popular
+# ---------------------------------------------------------------------------
+
+async def test_get_popular_weather(client):
+    cities = [make_weather_obj(city="London", country="GB"), make_weather_obj(city="Tokyo", country="JP")]
+    with patch("app.routers.weather.SQLAlchemyWeatherRepository") as MockRepo:
+        MockRepo.return_value.get_top_cities = AsyncMock(return_value=cities)
+        resp = await client.get("/api/v1/weather/popular")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
 
 
 # ---------------------------------------------------------------------------
