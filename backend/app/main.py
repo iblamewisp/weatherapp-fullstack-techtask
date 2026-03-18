@@ -38,6 +38,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Weather API", version="1.0.0", lifespan=lifespan)
 
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    schema.setdefault("components", {})["securitySchemes"] = {
+        "InternalToken": {"type": "apiKey", "in": "header", "name": "x-internal-token"}
+    }
+    schema["security"] = [{"InternalToken": []}]
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -49,7 +65,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "x-internal-token"],
 )
 
-UNPROTECTED_PATHS = {"/health"}
+UNPROTECTED_PATHS = {"/health", "/docs", "/redoc", "/openapi.json"}
 
 
 @app.middleware("http")

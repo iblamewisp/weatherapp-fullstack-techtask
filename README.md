@@ -89,6 +89,10 @@ cd frontend && npm test
 
 Rate limits are per IP. Exceeded limits return `429 Too Many Requests`.
 
+All endpoints (except `/health`) require the `x-internal-token` header matching `INTERNAL_API_TOKEN` from `.env`.
+
+Interactive docs are available at `http://localhost:8000/docs` — click **Authorize** and enter the token once to authenticate all requests from the UI.
+
 ---
 
 ## Post-spec Changes & Design Decisions
