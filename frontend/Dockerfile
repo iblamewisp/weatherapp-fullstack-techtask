@@ -6,7 +6,7 @@ COPY . .
 RUN npm run build
 
 FROM builder AS test
-CMD ["npm", "test", "--", "--watchAll=false", "--passWithNoTests"]
+CMD ["npx", "jest", "--watchAll=false", "--passWithNoTests"]
 
 FROM node:24-alpine AS runner
 WORKDIR /app

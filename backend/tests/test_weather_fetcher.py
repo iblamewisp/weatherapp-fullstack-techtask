@@ -21,6 +21,7 @@ def fetcher():
     mock_settings = MagicMock()
     mock_settings.OPENWEATHER_API_KEY = "test-key"
     mock_settings.OPENWEATHER_BASE_URL = "https://api.openweathermap.org/data/2.5"
+    mock_settings.CACHE_TTL_MINUTES = 30
     return WeatherFetcherService(http_client=MagicMock(), settings=mock_settings)
 
 
