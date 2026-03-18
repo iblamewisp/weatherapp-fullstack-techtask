@@ -48,8 +48,9 @@ export function CreateWeatherModal({ onSave, onClose }: Props) {
   const onSubmit = async (values: CreateWeatherValues) => {
     try {
       const created = await weatherClient.createRecord(values);
-      notify.success(`Record created for ${created.city}, ${created.country}`);
-      onSave(created);
+      const populated = await weatherClient.fetchByCity(created.city, created.country);
+      notify.success(`Record created for ${populated.city}, ${populated.country}`);
+      onSave(populated);
     } catch (err) {
       notify.error(err instanceof Error ? err.message : "Failed to create record");
     }

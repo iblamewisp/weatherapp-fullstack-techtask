@@ -9,6 +9,12 @@ class WeatherCreate(BaseModel):
     country: str
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    temperature: Optional[float] = None
+    feels_like: Optional[float] = None
+    humidity: Optional[int] = None
+    pressure: Optional[int] = None
+    wind_speed: Optional[float] = None
+    weather_description: Optional[str] = None
 
     @field_validator('country')
     @classmethod

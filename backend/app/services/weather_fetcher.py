@@ -139,7 +139,7 @@ class WeatherFetcherService:
     async def fetch_and_upsert(self, city: str, country: str, db_session: AsyncSession) -> WeatherResult:
         repo = SQLAlchemyWeatherRepository(db_session)
         cached = await repo.get_by_city(city, country)
-        if cached and _is_fresh(cached.last_updated, self.settings.CACHE_TTL_MINUTES):
+        if cached and cached.temperature is not None and _is_fresh(cached.last_updated, self.settings.CACHE_TTL_MINUTES):
             logger.debug(f"Cache hit (fresh) for city={city},{country}")
             return WeatherResult(data=cached, from_cache=True, owm_error=False)
         try:
@@ -159,7 +159,7 @@ class WeatherFetcherService:
     async def fetch_and_upsert_by_coords(self, lat: float, lon: float, db_session: AsyncSession) -> WeatherResult:
         repo = SQLAlchemyWeatherRepository(db_session)
         cached = await repo.get_by_coords(lat, lon)
-        if cached and _is_fresh(cached.last_updated, self.settings.CACHE_TTL_MINUTES):
+        if cached and cached.temperature is not None and _is_fresh(cached.last_updated, self.settings.CACHE_TTL_MINUTES):
             logger.debug(f"Cache hit (fresh) for lat={lat},lon={lon}")
             return WeatherResult(data=cached, from_cache=True, owm_error=False)
         try:

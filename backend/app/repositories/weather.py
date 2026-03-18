@@ -78,6 +78,12 @@ class SQLAlchemyWeatherRepository(BaseWeatherRepository):
             country=data.country.upper(),
             latitude=data.latitude,
             longitude=data.longitude,
+            temperature=data.temperature,
+            feels_like=data.feels_like,
+            humidity=data.humidity,
+            pressure=data.pressure,
+            wind_speed=data.wind_speed,
+            weather_description=data.weather_description,
         )
         self.session.add(weather)
         await self.session.flush()
